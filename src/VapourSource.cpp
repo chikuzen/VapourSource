@@ -248,13 +248,13 @@ VapourSource::VapourSource(const char* source, bool stacked, int index,
         env->ThrowError("VapourSource: input clip is not constant framerate.");
     }
 
-	if (vsvi->fpsNum > UINT_MAX) {
-		env->ThrowError("VapourSource: clip has over %u fpsnum.", UINT_MAX);
-	}
+    if (vsvi->fpsNum > UINT_MAX) {
+        env->ThrowError("VapourSource: clip has over %u fpsnum.", UINT_MAX);
+    }
 
-	if (vsvi->fpsDen > UINT_MAX) {
-		env->ThrowError("VapourSource: clip has over %u fpsden.", UINT_MAX);
-	}
+    if (vsvi->fpsDen > UINT_MAX) {
+        env->ThrowError("VapourSource: clip has over %u fpsden.", UINT_MAX);
+    }
 
     vi.pixel_type = get_avs_pixel_type(vsvi->format->id);
     if (vi.pixel_type == VideoInfo::CS_UNKNOWN) {
