@@ -81,46 +81,25 @@ static int get_avs_pixel_type(int in)
 
 
 static void __stdcall
-bitblock_transfer(uint8_t* dstp, int dst_pitch, const uint8_t* srcp,
-                  int src_pitch, int row_size, int height)
-{
-    if (height < 1) {
-        return;
-    }
-
-    if (src_pitch == dst_pitch && src_pitch == row_size) {
-        memcpy(dstp, srcp, row_size * height);
-        return;
-    }
-
-    for (int y = 0; y < height; y++) {
-        memcpy(dstp, srcp, row_size);
-        dstp += dst_pitch;
-        srcp += src_pitch;
-    }
-}
-
-
-static void __stdcall
 write_interleaved_frame(const VSAPI* vsapi, const VSFrameRef* src,
-                        PVideoFrame& dst, int num_planes)
+                        PVideoFrame& dst, int num_planes, IScriptEnvironment* env)
 {
     int plane[] = {PLANAR_Y, PLANAR_U, PLANAR_V};
 
     for (int p = 0; p < num_planes; p++) {
-        bitblock_transfer(dst->GetWritePtr(plane[p]),
-                          dst->GetPitch(plane[p]),
-                          vsapi->getReadPtr(src, p),
-                          vsapi->getStride(src, p),
-                          dst->GetRowSize(plane[p]),
-                          dst->GetHeight(plane[p]));
+        env->BitBlt(dst->GetWritePtr(plane[p]),
+                    dst->GetPitch(plane[p]),
+                    vsapi->getReadPtr(src, p),
+                    vsapi->getStride(src, p),
+                    dst->GetRowSize(plane[p]),
+                    dst->GetHeight(plane[p]));
     }
 }
 
 
 static void __stdcall
 write_stacked_frame(const VSAPI* vsapi, const VSFrameRef* src,
-                    PVideoFrame& dst, int num_planes)
+                    PVideoFrame& dst, int num_planes, IScriptEnvironment* env)
 {
     int plane[] = {PLANAR_Y, PLANAR_U, PLANAR_V};
 
@@ -171,7 +150,7 @@ class VapourSource : public IClip {
     VideoInfo vi;
 
     void (__stdcall *func_write_frame)(const VSAPI*, const VSFrameRef*,
-                                       PVideoFrame&, int);
+                                       PVideoFrame&, int, IScriptEnvironment*);
 public:
     VapourSource(const char* source, bool stacked, int index,
                  IScriptEnvironment* env);
@@ -205,7 +184,7 @@ VapourSource::VapourSource(const char* source, bool stacked, int index,
 
     size_t filesize = get_filesize(source);
     if (filesize == 0) {
-        env->ThrowError("VapourSource: source is whether it exists or empty.");
+        env->ThrowError("VapourSource: source does not exist, or it is empty.");
     }
     if (filesize > 16 * 1024 * 1024) {
         env->ThrowError("VapourSource: filesize of source is over 16MiB.");
@@ -213,7 +192,7 @@ VapourSource::VapourSource(const char* source, bool stacked, int index,
 
     script = (char *)calloc(filesize + 1, 1);
     if (!script) {
-        env->ThrowError("VapourSource: faile to allocate script buffer.");
+        env->ThrowError("VapourSource: failed to allocate script buffer.");
     }
 
     FILE *file = fopen(source, "rb");
@@ -269,7 +248,7 @@ VapourSource::VapourSource(const char* source, bool stacked, int index,
     vi.num_frames = vsvi->numFrames;
     vi.SetFieldBased(false);
 
-    func_write_frame = (over_8bit && stacked) ? write_stacked_frame:
+    func_write_frame = (over_8bit && stacked) ? write_stacked_frame :
                                                 write_interleaved_frame;
 }
 
@@ -299,7 +278,7 @@ PVideoFrame __stdcall VapourSource::GetFrame(int n, IScriptEnvironment* env)
         return dst;
     }
 
-    func_write_frame(vsapi, src, dst, vsvi->format->numPlanes);
+    func_write_frame(vsapi, src, dst, vsvi->format->numPlanes, env);
 
     vsapi->freeFrame(src);
 
