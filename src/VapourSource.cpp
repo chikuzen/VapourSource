@@ -240,7 +240,7 @@ VapourSource::VapourSource(const char* source, bool stacked, int index,
         env->ThrowError("VapourSource: input clip is unsupported format.");
     }
 
-    int over_8bit = vsvi->format->bytesPerSample - 1;
+    int over_8bit = vi.IsPlanar() ? vsvi->format->bytesPerSample - 1 : 0;
     vi.width = vsvi->width << (over_8bit * (stacked ? 0 : 1));
     vi.height = vsvi->height << (over_8bit * (stacked ? 1 : 0));
     vi.fps_numerator = (unsigned)vsvi->fpsNum;
