@@ -103,7 +103,8 @@ write_stacked_frame(const VSAPI* vsapi, const VSFrameRef* src,
 {
     int plane[] = {PLANAR_Y, PLANAR_U, PLANAR_V};
 
-    __m128i mask = _mm_srli_epi16(_mm_set1_epi8((char)0xFF), 8);
+    __m128i mask = _mm_setzero_si128();
+    mask = _mm_srli_epi16(_mm_cmpeq_epi32(mask, mask), 8);
 
     for (int p = 0; p < num_planes; p++) {
 
