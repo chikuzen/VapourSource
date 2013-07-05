@@ -1,5 +1,5 @@
 /*
-  VapourSynth Script Reader for AviSynth2.6x
+  VapourSynth Script Importer for AviSynth2.6x
 
   Copyright (C) 2013 Oka Motofumi
 
@@ -82,7 +82,8 @@ static int get_avs_pixel_type(int in)
 
 static void __stdcall
 write_interleaved_frame(const VSAPI* vsapi, const VSFrameRef* src,
-                        PVideoFrame& dst, int num_planes, IScriptEnvironment* env)
+                        PVideoFrame& dst, int num_planes,
+                        IScriptEnvironment* env)
 {
     int plane[] = {PLANAR_Y, PLANAR_U, PLANAR_V};
 
@@ -147,13 +148,13 @@ class VapourSource : public IClip {
     const VSAPI* vsapi;
     VSNodeRef* node;
     const VSVideoInfo* vsvi;
-    char* script;
+    char* script_buffer;
     VideoInfo vi;
 
     void (__stdcall *func_write_frame)(const VSAPI*, const VSFrameRef*,
                                        PVideoFrame&, int, IScriptEnvironment*);
 public:
-    VapourSource(const char* source, bool stacked, int index,
+    VapourSource(const char* source, bool stacked, int index, const char* mode,
                  IScriptEnvironment* env);
     virtual ~VapourSource();
     PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* env);
@@ -165,80 +166,87 @@ public:
 
 
 VapourSource::VapourSource(const char* source, bool stacked, int index,
-                           IScriptEnvironment* env)
+                           const char* mode, IScriptEnvironment* env)
 {
     is_init = 0;
     se = 0;
     node = 0;
-    script = 0;
+    script_buffer = 0;
     memset(&vi, 0, sizeof(vi));
 
     is_init = vseval_init();
     if (is_init == 0) {
-        env->ThrowError("VapourSource: failed to initialize VapourSynth.");
+        env->ThrowError("%s: failed to initialize VapourSynth.", mode);
     }
 
     vsapi = vseval_getVSApi();
     if (!vsapi) {
-        env->ThrowError("VapourSource: failed to get vsapi pointer.");
+        env->ThrowError("%s: failed to get vsapi pointer.", mode);
     }
 
-    size_t filesize = get_filesize(source);
-    if (filesize == 0) {
-        env->ThrowError("VapourSource: source does not exist, or it is empty.");
-    }
-    if (filesize > 16 * 1024 * 1024) {
-        env->ThrowError("VapourSource: filesize of source is over 16MiB.");
+    const char* input = source;
+    const char* errfile = "no file";
+    if (strcmp(mode, "VSImport") == 0) {
+        size_t filesize = get_filesize(source);
+        if (filesize == 0) {
+            env->ThrowError("%s: source file does not exist, or it is empty.",
+                            mode);
+        }
+        if (filesize > 16 * 1024 * 1024) {
+            env->ThrowError("%s: filesize of source is over 16MiB.", mode);
+        }
+
+        script_buffer = (char *)calloc(filesize + 1, 1);
+        if (!script_buffer) {
+            env->ThrowError("%s: failed to allocate script buffer.", mode);
+        }
+
+        FILE *file = fopen(source, "rb");
+        if (!file) {
+            env->ThrowError("%s: failed to open source script file.", mode);
+        }
+        fread(script_buffer, 1, filesize, file);
+        fclose(file);
+        input = script_buffer;
+        errfile = source;
     }
 
-    script = (char *)calloc(filesize + 1, 1);
-    if (!script) {
-        env->ThrowError("VapourSource: failed to allocate script buffer.");
-    }
-
-    FILE *file = fopen(source, "rb");
-    if (!file) {
-        env->ThrowError("VapourSource: failed to open source script file.");
-    }
-    fread(script, 1, filesize, file);
-    fclose(file);
-
-    if (vseval_evaluateScript(&se, script, source)) {
-        env->ThrowError("VapourSource: failed to evaluate script.\n%s",
-                        vseval_getError(se));
+    if (vseval_evaluateScript(&se, input, errfile)) {
+        env->ThrowError("%s: failed to evaluate script.\n%s",
+                        mode, vseval_getError(se));
     }
 
     node = vseval_getOutput(se, index);
     if (!node) {
-        env->ThrowError("VapourSource:"
-                        " failed to get VapourSynth clip(index:%d).", index);
+        env->ThrowError("%s: failed to get VapourSynth clip(index:%d).",
+                        mode, index);
     }
 
     vsvi = vsapi->getVideoInfo(node);
 
     if (vsvi->numFrames == 0) {
-        env->ThrowError("VapourSource: input clip has infinite length.");
+        env->ThrowError("%s: input clip has infinite length.", mode);
     }
 
     if (!vsvi->format || vsvi->width == 0 || vsvi->height == 0) {
-        env->ThrowError("VapourSource: input clip is not constant format.");
+        env->ThrowError("%s: input clip is not constant format.", mode);
     }
 
     if (vsvi->fpsNum == 0) {
-        env->ThrowError("VapourSource: input clip is not constant framerate.");
+        env->ThrowError("%s: input clip is not constant framerate.", mode);
     }
 
     if (vsvi->fpsNum > UINT_MAX) {
-        env->ThrowError("VapourSource: clip has over %u fpsnum.", UINT_MAX);
+        env->ThrowError("%s: clip has over %u fpsnum.", mode, UINT_MAX);
     }
 
     if (vsvi->fpsDen > UINT_MAX) {
-        env->ThrowError("VapourSource: clip has over %u fpsden.", UINT_MAX);
+        env->ThrowError("%s: clip has over %u fpsden.", mode, UINT_MAX);
     }
 
     vi.pixel_type = get_avs_pixel_type(vsvi->format->id);
     if (vi.pixel_type == VideoInfo::CS_UNKNOWN) {
-        env->ThrowError("VapourSource: input clip is unsupported format.");
+        env->ThrowError("%s: input clip is unsupported format.", mode);
     }
 
     int over_8bit = vi.IsPlanar() ? vsvi->format->bytesPerSample - 1 : 0;
@@ -256,8 +264,8 @@ VapourSource::VapourSource(const char* source, bool stacked, int index,
 
 VapourSource::~VapourSource()
 {
-    if (script) {
-        free(script);
+    if (script_buffer) {
+        free(script_buffer);
     }
     if (node) {
         vsapi->freeNode(node);
@@ -290,11 +298,12 @@ PVideoFrame __stdcall VapourSource::GetFrame(int n, IScriptEnvironment* env)
 AVSValue __cdecl
 create_vapoursource(AVSValue args, void* user_data, IScriptEnvironment* env)
 {
+    const char* mode = (char*)user_data;
     if (!args[0].Defined()) {
-        env->ThrowError("VapourSource: No source specified");
+        env->ThrowError("%s: No source specified", mode);
     }
     return new VapourSource(args[0].AsString(), args[1].AsBool(false),
-                            args[2].AsInt(0), env);
+                            args[2].AsInt(0), mode, env);
 }
 
 
@@ -302,7 +311,9 @@ extern "C" __declspec(dllexport) const char* __stdcall
 AvisynthPluginInit3(IScriptEnvironment* env, const AVS_Linkage* const vectors)
 {
     AVS_linkage = vectors;
-    env->AddFunction("VapourSource", "[source]s[stacked]b[index]i",
-                     create_vapoursource, 0);
-    return "VapourSynth Script Reader ver."VS_VERSION" by Oka Motofumi";
+    env->AddFunction("VSImport", "[source]s[stacked]b[index]i",
+                     create_vapoursource, (void*)"VSImport");
+    env->AddFunction("VSEval", "[source]s[stacked]b[index]i",
+                     create_vapoursource, (void*)"VSEval");
+    return "VapourSynth Script importer ver."VS_VERSION" by Oka Motofumi";
 }
