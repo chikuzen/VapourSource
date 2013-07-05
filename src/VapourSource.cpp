@@ -48,6 +48,29 @@ static size_t get_filesize(const char* filename)
 }
 
 
+static char* convert_ansi_to_utf8(const char* ansi_string)
+{
+    int length = MultiByteToWideChar(CP_THREAD_ACP, 0, ansi_string, -1, 0, 0);
+
+    wchar_t* wc_string = (wchar_t*)malloc(sizeof(wchar_t) * length);
+    if (!wc_string) {
+        return 0;
+    }
+    MultiByteToWideChar(CP_THREAD_ACP, 0, ansi_string, -1, wc_string, length);
+
+    length = WideCharToMultiByte(CP_UTF8, 0, wc_string, -1, 0, 0, 0, 0);
+    char* utf8_string = (char*)malloc(length);
+    if (!utf8_string) {
+        free(wc_string);
+        return 0;
+    }
+    WideCharToMultiByte(CP_UTF8, 0, wc_string, -1, utf8_string, length, 0, 0);
+    free(wc_string);
+
+    return utf8_string;
+}
+
+
 static int get_avs_pixel_type(int in)
 {
     struct {
@@ -184,8 +207,7 @@ VapourSource::VapourSource(const char* source, bool stacked, int index,
         env->ThrowError("%s: failed to get vsapi pointer.", mode);
     }
 
-    const char* input = source;
-    const char* errfile = "no file";
+    const char* errfile = 0;
     if (strcmp(mode, "VSImport") == 0) {
         size_t filesize = get_filesize(source);
         if (filesize == 0) {
@@ -196,22 +218,32 @@ VapourSource::VapourSource(const char* source, bool stacked, int index,
             env->ThrowError("%s: filesize of source is over 16MiB.", mode);
         }
 
-        script_buffer = (char *)calloc(filesize + 1, 1);
-        if (!script_buffer) {
+        char *ansi = (char *)calloc(filesize + 1, 1);
+        if (!ansi) {
             env->ThrowError("%s: failed to allocate script buffer.", mode);
         }
 
         FILE *file = fopen(source, "rb");
         if (!file) {
-            env->ThrowError("%s: failed to open source script file.", mode);
+            env->ThrowError("%s: failed to open source file.", mode);
         }
-        fread(script_buffer, 1, filesize, file);
+        fread(ansi, 1, filesize, file);
         fclose(file);
-        input = script_buffer;
+
+        script_buffer = convert_ansi_to_utf8(ansi);
+        free(ansi);
         errfile = source;
+
+    } else {
+        script_buffer = convert_ansi_to_utf8(source);
+        errfile = "no file";
     }
 
-    if (vseval_evaluateScript(&se, input, errfile)) {
+    if (!script_buffer) {
+        env->ThrowError("%s: failed to convert to UTF-8.\n", mode);
+    }
+
+    if (vseval_evaluateScript(&se, script_buffer, errfile)) {
         env->ThrowError("%s: failed to evaluate script.\n%s",
                         mode, vseval_getError(se));
     }
