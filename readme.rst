@@ -1,7 +1,7 @@
 ============
 VapourSource
 ============
-VapourSynth Script Reader for AviSynth2.6x
+VapourSynth Script Importer for AviSynth2.6x
 
 requirement:
 ------------
@@ -19,12 +19,37 @@ usage:
 ------
 as follows.::
 
-    LoadPlugin("/path/to/VapourSource.dll")
-    VapourSource(source="/path/to/the/script.vpy", index=0, stacked=false)
+    VSImport(string source, bool "stacked", int "index")
 
-    source -  input script path.
-    index -   index of input clip(default 0).
-    stacked - if this is set to true, MSB/LSB will be separated and be stacked vertially(default false).
+    source  - input script path.
+    stacked - if this is set to true, MSB/LSB will be separated and be stacked vertially(default:false).
+    index   - index of input clip(default:0).
+
+
+    VSEval(string source, bool "stacked", int "index")
+    
+    source - vapoursynth script.
+    stacked and index are same as VSImport.
+
+examples:
+---------
+VSImport example::
+
+    LoadPlugin("c:/avisynth/plugins/VapourSource.dll")
+    VSImport("d:/my_scripts/10bits_yuv_clip.vpy", stacked=true)
+
+VSEval example::
+
+    LoadPlugin("c:/avisynth/plugins/VapourSource.dll")
+    script = """
+    import vapoursynth as vs
+    bc = vs.get_core().std.BlankClip
+    clip0 = bc(format=vs.YUV422P8, color=[0, 128, 128])
+    clip1 = bc(format=vs.YUV422P8, color=[255, 128, 128])
+    clip0.set_output(index=0)
+    clip1.set_output(index=1)
+    """
+    VSEval(script, index=1)
 
 note:
 -----
