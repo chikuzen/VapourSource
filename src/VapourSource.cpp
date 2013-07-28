@@ -23,7 +23,6 @@
 
 #include <stdio.h>
 #include <stdint.h>
-#include <sys/stat.h>
 #include <limits.h>
 #include <emmintrin.h>
 #include <windows.h>
@@ -36,16 +35,6 @@
 
 
 static const AVS_Linkage* AVS_linkage = 0;
-
-
-static size_t get_filesize(const char* filename)
-{
-    struct stat st;
-    if (stat(filename, &st)) {
-        return 0;
-    }
-    return (size_t)st.st_size;
-}
 
 
 static char* convert_ansi_to_utf8(const char* ansi_string)
@@ -197,61 +186,35 @@ VapourSource::VapourSource(const char* source, bool stacked, int index,
     script_buffer = 0;
     memset(&vi, 0, sizeof(vi));
 
-    is_init = vseval_init();
+    is_init = vsscript_init();
     if (is_init == 0) {
         env->ThrowError("%s: failed to initialize VapourSynth.", mode);
     }
 
-    vsapi = vseval_getVSApi();
+    vsapi = vsscript_getVSApi();
     if (!vsapi) {
         env->ThrowError("%s: failed to get vsapi pointer.", mode);
     }
 
-    const char* errfile = 0;
-    if (strcmp(mode, "VSImport") == 0) {
-        size_t filesize = get_filesize(source);
-        if (filesize == 0) {
-            env->ThrowError("%s: source file does not exist, or it is empty.",
-                            mode);
-        }
-        if (filesize > 16 * 1024 * 1024) {
-            env->ThrowError("%s: filesize of source is over 16MiB.", mode);
-        }
-
-        char *ansi = (char *)calloc(filesize + 1, 1);
-        if (!ansi) {
-            env->ThrowError("%s: failed to allocate script buffer.", mode);
-        }
-
-        FILE *file = fopen(source, "rb");
-        if (!file) {
-            env->ThrowError("%s: failed to open source file.", mode);
-        }
-        fread(ansi, 1, filesize, file);
-        fclose(file);
-
-        script_buffer = convert_ansi_to_utf8(ansi);
-        free(ansi);
-        errfile = source;
-
-    } else {
-        script_buffer = convert_ansi_to_utf8(source);
-        errfile = "no file";
-    }
-
+    script_buffer = convert_ansi_to_utf8(source);
     if (!script_buffer) {
         env->ThrowError("%s: failed to convert to UTF-8.\n", mode);
     }
 
-    if (vseval_evaluateScript(&se, script_buffer, errfile)) {
-        env->ThrowError("%s: failed to evaluate script.\n%s",
-                        mode, vseval_getError(se));
+    if (mode[2] == 'I' && vsscript_evaluateFile(&se, script_buffer)) {
+        env->ThrowError("%s: failed to evaluate script.\n%s", mode,
+                        vsscript_getError(se));
     }
 
-    node = vseval_getOutput(se, index);
+    if (mode[2] == 'E' && vsscript_evaluateScript(&se, script_buffer, 0)) {
+        env->ThrowError("%s: failed to evaluate script.\n%s", mode,
+                        vsscript_getError(se));
+    }
+
+    node = vsscript_getOutput(se, index);
     if (!node) {
-        env->ThrowError("%s: failed to get VapourSynth clip(index:%d).",
-                        mode, index);
+        env->ThrowError("%s: failed to get VapourSynth clip(index:%d).", mode,
+                        index);
     }
 
     vsvi = vsapi->getVideoInfo(node);
@@ -303,21 +266,22 @@ VapourSource::~VapourSource()
         vsapi->freeNode(node);
     }
     if (se) {
-        vseval_freeScript(se);
+        vsscript_freeScript(se);
     }
     if (is_init) {
-        vseval_finalize();
+        vsscript_finalize();
     }
 }
 
 
 PVideoFrame __stdcall VapourSource::GetFrame(int n, IScriptEnvironment* env)
 {
-    PVideoFrame dst = env->NewVideoFrame(vi);
     const VSFrameRef* src = vsapi->getFrame(n, node, 0, 0);
     if (!src) {
-        return dst;
+        env->ThrowError("%s: failed to get frame from vapoursynth.");
     }
+
+    PVideoFrame dst = env->NewVideoFrame(vi);
 
     func_write_frame(vsapi, src, dst, vsvi->format->numPlanes, env);
 
