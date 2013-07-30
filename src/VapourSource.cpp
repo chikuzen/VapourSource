@@ -201,12 +201,12 @@ VapourSource::VapourSource(const char* source, bool stacked, int index,
         env->ThrowError("%s: failed to convert to UTF-8.\n", mode);
     }
 
-    if (mode[2] == 'I' && vsscript_evaluateFile(&se, script_buffer)) {
+    if (mode[2] == 'I' && vsscript_evaluateFile(&se, script_buffer, 0)) {
         env->ThrowError("%s: failed to evaluate script.\n%s", mode,
                         vsscript_getError(se));
     }
 
-    if (mode[2] == 'E' && vsscript_evaluateScript(&se, script_buffer, 0)) {
+    if (mode[2] == 'E' && vsscript_evaluateScript(&se, script_buffer, 0, 0)) {
         env->ThrowError("%s: failed to evaluate script.\n%s", mode,
                         vsscript_getError(se));
     }
