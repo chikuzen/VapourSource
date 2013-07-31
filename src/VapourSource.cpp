@@ -81,6 +81,7 @@ static int get_avs_pixel_type(int in)
         {pfYUV444P10,   VideoInfo::CS_YV24   },
         {pfYUV444P16,   VideoInfo::CS_YV24   },
         {pfYUV411P8,    VideoInfo::CS_YV411  },
+        {pfRGB24,       VideoInfo::CS_BGR24  },
         {pfCompatBGR32, VideoInfo::CS_BGR32  },
         {pfCompatYUY2,  VideoInfo::CS_YUY2   },
         {in,            VideoInfo::CS_UNKNOWN}
@@ -97,15 +98,23 @@ write_interleaved_frame(const VSAPI* vsapi, const VSFrameRef* src,
                         PVideoFrame& dst, int num_planes,
                         IScriptEnvironment* env)
 {
-    int plane[] = {PLANAR_Y, PLANAR_U, PLANAR_V};
+    int planes[] = {PLANAR_Y, PLANAR_U, PLANAR_V};
 
     for (int p = 0; p < num_planes; p++) {
-        env->BitBlt(dst->GetWritePtr(plane[p]),
-                    dst->GetPitch(plane[p]),
+        uint8_t *dstp = dst->GetWritePtr(planes[p]);
+        int dst_pitch = dst->GetPitch(planes[p]);
+        int height = dst->GetHeight(planes[p]);
+
+        if ((vsapi->getFrameFormat(src))->id == pfCompatBGR32) {
+            dstp += dst_pitch * (height - 1);
+            dst_pitch *= -1;
+        }
+
+        env->BitBlt(dstp, dst_pitch,
                     vsapi->getReadPtr(src, p),
                     vsapi->getStride(src, p),
-                    dst->GetRowSize(plane[p]),
-                    dst->GetHeight(plane[p]));
+                    dst->GetRowSize(planes[p]),
+                    height);
     }
 }
 
@@ -149,6 +158,35 @@ write_stacked_frame(const VSAPI* vsapi, const VSFrameRef* src,
             dstp0 += dst_pitch;
             dstp1 += dst_pitch;
         }
+    }
+}
+
+
+static void __stdcall
+write_bgr24_frame(const VSAPI* vsapi, const VSFrameRef* src,
+                  PVideoFrame& dst, int num_planes, IScriptEnvironment* env)
+{
+    int width = vsapi->getFrameWidth(src, 0);
+    int height = vsapi->getFrameHeight(src, 0);
+
+    const uint8_t* srcpb = vsapi->getReadPtr(src, 2);
+    const uint8_t* srcpg = vsapi->getReadPtr(src, 1);
+    const uint8_t* srcpr = vsapi->getReadPtr(src, 0);
+    int src_pitch = vsapi->getStride(src, 0);
+
+    int dst_pitch = dst->GetPitch();
+    uint8_t* dstp = dst->GetWritePtr() + dst_pitch * (height - 1);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            dstp[3 * x    ] = srcpb[x];
+            dstp[3 * x + 1] = srcpg[x];
+            dstp[3 * x + 2] = srcpr[x];
+        }
+        srcpb += src_pitch;
+        srcpg += src_pitch;
+        srcpr += src_pitch;
+        dstp -= dst_pitch;
     }
 }
 
@@ -252,7 +290,8 @@ VapourSource::VapourSource(const char* source, bool stacked, int index,
     vi.num_frames = vsvi->numFrames;
     vi.SetFieldBased(false);
 
-    func_write_frame = (over_8bit && stacked) ? write_stacked_frame :
+    func_write_frame = vi.IsRGB24()           ? write_bgr24_frame :
+                       over_8bit && stacked   ? write_stacked_frame :
                                                 write_interleaved_frame;
 }
 
