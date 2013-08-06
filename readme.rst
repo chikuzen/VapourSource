@@ -54,10 +54,10 @@ VSEval example::
 note:
 -----
 Supported formats are YUV420P8/9/10/16, YUV422P8/9/10/16, YUV444P8/9/10/16,
-YUV411P8, GRAY8/16, COMPATBGR32 and COMPATYUY2.
+YUV411P8, GRAY8/16, RGB24, COMPATBGR32 and COMPATYUY2.
 Others are not.
 
-Not constant format/framerate clip is unsupported.
+Not constant format/resolution/framerate clips are unsupported.
 
 source code:
 ------------
