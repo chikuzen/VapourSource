@@ -31,7 +31,7 @@
 
 #pragma warning(disable:4996)
 
-#define VS_VERSION "0.0.1"
+#define VS_VERSION "0.0.3"
 
 
 static const AVS_Linkage* AVS_linkage = 0;
@@ -39,6 +39,10 @@ static const AVS_Linkage* AVS_linkage = 0;
 
 static char* convert_ansi_to_utf8(const char* ansi_string)
 {
+    if (!ansi_string) {
+        return 0;
+    }
+
     int length = MultiByteToWideChar(CP_THREAD_ACP, 0, ansi_string, -1, 0, 0);
 
     wchar_t* wc_string = (wchar_t*)malloc(sizeof(wchar_t) * length);
@@ -100,15 +104,18 @@ write_interleaved_frame(const VSAPI* vsapi, const VSFrameRef* src,
 {
     int planes[] = {PLANAR_Y, PLANAR_U, PLANAR_V};
 
-    for (int p = 0; p < num_planes; p++) {
-        uint8_t *dstp = dst->GetWritePtr(planes[p]);
-        int dst_pitch = dst->GetPitch(planes[p]);
-        int height = dst->GetHeight(planes[p]);
+    int pitch_mul = 1;
+    int dstp_adjust = 0;
+    if ((vsapi->getFrameFormat(src))->id == pfCompatBGR32) {
+        pitch_mul = -1;
+        dstp_adjust = 1;
+    }
 
-        if ((vsapi->getFrameFormat(src))->id == pfCompatBGR32) {
-            dstp += dst_pitch * (height - 1);
-            dst_pitch *= -1;
-        }
+    for (int p = 0; p < num_planes; p++) {
+        int dst_pitch = dst->GetPitch(planes[p]) * pitch_mul;
+        int height = dst->GetHeight(planes[p]);
+        uint8_t *dstp = dst->GetWritePtr(planes[p]) +
+                        dstp_adjust * (-dst_pitch * (height - 1));
 
         env->BitBlt(dstp, dst_pitch,
                     vsapi->getReadPtr(src, p),
@@ -239,14 +246,21 @@ VapourSource::VapourSource(const char* source, bool stacked, int index,
         env->ThrowError("%s: failed to convert to UTF-8.\n", mode);
     }
 
-    if (mode[2] == 'I' && vsscript_evaluateFile(&se, script_buffer, 0)) {
+    if (mode[2] == 'I'
+        && vsscript_evaluateFile(&se, script_buffer, efSetWorkingDir)) {
         env->ThrowError("%s: failed to evaluate script.\n%s", mode,
                         vsscript_getError(se));
     }
 
-    if (mode[2] == 'E' && vsscript_evaluateScript(&se, script_buffer, 0, 0)) {
-        env->ThrowError("%s: failed to evaluate script.\n%s", mode,
-                        vsscript_getError(se));
+    if (mode[2] == 'E') {
+        char *name = convert_ansi_to_utf8(env->GetVar("$ScriptName$").AsString());
+        int ret = vsscript_evaluateScript(&se, script_buffer, name,
+                                          efSetWorkingDir);
+        free(name);
+        if (ret) {
+            env->ThrowError("%s: failed to evaluate script.\n%s", mode,
+                            vsscript_getError(se));
+        }
     }
 
     node = vsscript_getOutput(se, index);
