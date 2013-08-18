@@ -132,8 +132,7 @@ write_stacked_frame(const VSAPI* vsapi, const VSFrameRef* src,
 {
     int plane[] = {PLANAR_Y, PLANAR_U, PLANAR_V};
 
-    __m128i mask = _mm_setzero_si128();
-    mask = _mm_srli_epi16(_mm_cmpeq_epi32(mask, mask), 8);
+    __m128i mask = _mm_set1_epi16(0x00FF);
 
     for (int p = 0; p < num_planes; p++) {
 
@@ -152,10 +151,8 @@ write_stacked_frame(const VSAPI* vsapi, const VSFrameRef* src,
                 __m128i lsb = _mm_packus_epi16(_mm_and_si128(mask, xmm0),
                                                _mm_and_si128(mask, xmm1));
 
-                xmm0 = _mm_srli_si128(xmm0, 1);
-                xmm1 = _mm_srli_si128(xmm1, 1);
-                __m128i msb = _mm_packus_epi16(_mm_and_si128(mask, xmm0),
-                                               _mm_and_si128(mask, xmm1));
+                __m128i msb = _mm_packus_epi16(_mm_srli_epi16(xmm0, 8),
+                                               _mm_srli_epi16(xmm1, 8));
 
                 _mm_store_si128((__m128i*)(dstp0 + x), msb);
                 _mm_store_si128((__m128i*)(dstp1 + x), lsb);
