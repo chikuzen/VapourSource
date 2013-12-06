@@ -208,8 +208,8 @@ class VapourSource : public IClip {
     void (__stdcall *func_write_frame)(const VSAPI*, const VSFrameRef*,
                                        PVideoFrame&, int, IScriptEnvironment*);
 public:
-    VapourSource(const char* source, bool stacked, int index, const char* mode,
-                 IScriptEnvironment* env);
+    VapourSource(const char* source, bool stacked, int index, bool utf8, 
+                 const char* mode, IScriptEnvironment* env);
     virtual ~VapourSource();
     PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* env);
     bool __stdcall GetParity(int n) { return false; }
@@ -220,7 +220,7 @@ public:
 
 
 VapourSource::VapourSource(const char* source, bool stacked, int index,
-                           const char* mode, IScriptEnvironment* env)
+                           bool utf8, const char* mode, IScriptEnvironment* env)
 {
     is_init = 0;
     se = 0;
@@ -238,9 +238,17 @@ VapourSource::VapourSource(const char* source, bool stacked, int index,
         env->ThrowError("%s: failed to get vsapi pointer.", mode);
     }
 
-    script_buffer = convert_ansi_to_utf8(source);
-    if (!script_buffer) {
-        env->ThrowError("%s: failed to convert to UTF-8.\n", mode);
+    if (utf8) {
+        script_buffer = (char*)malloc(strlen(source)+1);
+        if (!script_buffer)
+            env->ThrowError("%s: failed to allocate memory.\n", mode);
+        strcpy(script_buffer, source);
+    }
+    else {
+        script_buffer = convert_ansi_to_utf8(source);
+        if (!script_buffer) {
+            env->ThrowError("%s: failed to convert to UTF-8.\n", mode);
+        }
     }
 
     if (mode[2] == 'I'
@@ -349,7 +357,7 @@ create_vapoursource(AVSValue args, void* user_data, IScriptEnvironment* env)
         env->ThrowError("%s: No source specified", mode);
     }
     return new VapourSource(args[0].AsString(), args[1].AsBool(false),
-                            args[2].AsInt(0), mode, env);
+                            args[2].AsInt(0), args[3].AsBool(false), mode, env);
 }
 
 
@@ -359,7 +367,7 @@ AvisynthPluginInit3(IScriptEnvironment* env, const AVS_Linkage* const vectors)
     AVS_linkage = vectors;
     env->AddFunction("VSImport", "[source]s[stacked]b[index]i",
                      create_vapoursource, (void*)"VSImport");
-    env->AddFunction("VSEval", "[source]s[stacked]b[index]i",
+    env->AddFunction("VSEval", "[source]s[stacked]b[index]i[utf8]b",
                      create_vapoursource, (void*)"VSEval");
     return "VapourSynth Script importer ver."VS_VERSION" by Oka Motofumi";
 }
