@@ -230,7 +230,7 @@ void VapourSource::validate(bool cond, std::string msg)
 {
     if (cond) {
         destroy();
-        throw msg.c_str();
+        throw msg;
     }
 }
 
@@ -259,7 +259,7 @@ VapourSource(const char* source, bool stacked, int index, const char* m,
         if (ret != 0) {
             auto msg = string("failed to evaluate script.\n") + vsscript_getError(se);
             destroy();
-            throw msg.c_str();
+            throw msg;
         }
     }
 
@@ -270,7 +270,7 @@ VapourSource(const char* source, bool stacked, int index, const char* m,
         if (ret != 0) {
             auto msg = string("failed to evaluate script.\n") + vsscript_getError(se);
             destroy();
-            throw msg.c_str();
+            throw msg;
         }
     }
 
@@ -340,8 +340,8 @@ create_vapoursource(AVSValue args, void* user_data, IScriptEnvironment* env)
     try {
         return new VapourSource(args[0].AsString(), args[1].AsBool(false),
                                 args[2].AsInt(0), mode, env);
-    } catch (const char* e) {
-        env->ThrowError("%s: %s", mode, e);
+    } catch (std::string e) {
+        env->ThrowError("%s: %s", mode, e.c_str());
     }
     return 0;
 }
