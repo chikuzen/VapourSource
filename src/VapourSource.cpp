@@ -23,7 +23,9 @@
 
 #include <cstdio>
 #include <cstdint>
-#include <limits.h>
+#include <climits>
+#include <string>
+#include <vector>
 #include <emmintrin.h>
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -33,36 +35,24 @@
 
 #pragma warning(disable:4996)
 
-#define VS_VERSION "0.0.3"
+#define VS_VERSION "0.0.4"
 
 
 static const AVS_Linkage* AVS_linkage = 0;
 
 
-static char* convert_ansi_to_utf8(const char* ansi_string)
+static void
+convert_ansi_to_utf8(const char* ansi_string, std::vector<char>& buff)
 {
-    if (!ansi_string) {
-        return 0;
-    }
-
     int length = MultiByteToWideChar(CP_THREAD_ACP, 0, ansi_string, -1, 0, 0);
 
-    wchar_t* wc_string = (wchar_t*)malloc(sizeof(wchar_t) * length);
-    if (!wc_string) {
-        return 0;
-    }
-    MultiByteToWideChar(CP_THREAD_ACP, 0, ansi_string, -1, wc_string, length);
+    std::vector<wchar_t> wc_string;
+    wc_string.reserve(length + 1);
+    MultiByteToWideChar(CP_THREAD_ACP, 0, ansi_string, -1, wc_string.data(), length);
 
-    length = WideCharToMultiByte(CP_UTF8, 0, wc_string, -1, 0, 0, 0, 0);
-    char* utf8_string = (char*)malloc(length);
-    if (!utf8_string) {
-        free(wc_string);
-        return 0;
-    }
-    WideCharToMultiByte(CP_UTF8, 0, wc_string, -1, utf8_string, length, 0, 0);
-    free(wc_string);
-
-    return utf8_string;
+    length = WideCharToMultiByte(CP_UTF8, 0, wc_string.data(), -1, 0, 0, 0, 0);
+    buff.reserve(length + 1);
+    WideCharToMultiByte(CP_UTF8, 0, wc_string.data(), -1, buff.data(), length, 0, 0);
 }
 
 
@@ -156,8 +146,8 @@ write_stacked_frame(const VSAPI* vsapi, const VSFrameRef* src,
                 __m128i msb = _mm_packus_epi16(_mm_srli_epi16(xmm0, 8),
                                                _mm_srli_epi16(xmm1, 8));
 
-                _mm_store_si128((__m128i*)(dstp0 + x), msb);
-                _mm_store_si128((__m128i*)(dstp1 + x), lsb);
+                _mm_stream_si128((__m128i*)(dstp0 + x), msb);
+                _mm_stream_si128((__m128i*)(dstp1 + x), lsb);
             }
 
             srcp += src_pitch;
@@ -198,21 +188,23 @@ write_bgr24_frame(const VSAPI* vsapi, const VSFrameRef* src,
 
 
 class VapourSource : public IClip {
-
+    const char* mode;
     int is_init;
     VSScript* se;
     const VSAPI* vsapi;
     VSNodeRef* node;
     const VSVideoInfo* vsvi;
-    char* script_buffer;
     VideoInfo vi;
 
     void (__stdcall *func_write_frame)(const VSAPI*, const VSFrameRef*,
                                        PVideoFrame&, int, IScriptEnvironment*);
+    void validate(bool cond, std::string msg);
+    void destroy();
+
 public:
     VapourSource(const char* source, bool stacked, int index, const char* mode,
                  IScriptEnvironment* env);
-    virtual ~VapourSource();
+    ~VapourSource();
     PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* env);
     bool __stdcall GetParity(int n) { return false; }
     void __stdcall GetAudio(void*, __int64, __int64, IScriptEnvironment*) {}
@@ -221,79 +213,85 @@ public:
 };
 
 
-VapourSource::VapourSource(const char* source, bool stacked, int index,
-                           const char* mode, IScriptEnvironment* env)
+void VapourSource::destroy()
 {
+    if (node) {
+        vsapi->freeNode(node);
+    }
+    if (se) {
+        vsscript_freeScript(se);
+    }
+    if (is_init) {
+        vsscript_finalize();
+    }
+}
+
+void VapourSource::validate(bool cond, std::string msg)
+{
+    if (cond) {
+        destroy();
+        throw msg.c_str();
+    }
+}
+
+VapourSource::
+VapourSource(const char* source, bool stacked, int index, const char* m,
+             IScriptEnvironment* env) : mode(m)
+{
+    using std::string;
+
     is_init = 0;
-    se = 0;
-    node = 0;
-    script_buffer = 0;
+    se = nullptr;
+    node = nullptr;
     memset(&vi, 0, sizeof(vi));
 
     is_init = vsscript_init();
-    if (is_init == 0) {
-        env->ThrowError("%s: failed to initialize VapourSynth.", mode);
-    }
+    validate(is_init == 0, "failed to initialize VapourSynth.");
 
     vsapi = vsscript_getVSApi();
-    if (!vsapi) {
-        env->ThrowError("%s: failed to get vsapi pointer.", mode);
-    }
+    validate(!vsapi, "failed to get vsapi pointer.");
 
-    script_buffer = convert_ansi_to_utf8(source);
-    if (!script_buffer) {
-        env->ThrowError("%s: failed to convert to UTF-8.\n", mode);
-    }
+    std::vector<char> script;
+    convert_ansi_to_utf8(source, script);
 
-    if (mode[2] == 'I'
-        && vsscript_evaluateFile(&se, script_buffer, efSetWorkingDir)) {
-        env->ThrowError("%s: failed to evaluate script.\n%s", mode,
-                        vsscript_getError(se));
-    }
-
-    if (mode[2] == 'E') {
-        char *name = convert_ansi_to_utf8(env->GetVar("$ScriptName$").AsString());
-        int ret = vsscript_evaluateScript(&se, script_buffer, name,
-                                          efSetWorkingDir);
-        free(name);
-        if (ret) {
-            env->ThrowError("%s: failed to evaluate script.\n%s", mode,
-                            vsscript_getError(se));
+    if (mode[2] == 'I') {
+        int ret = vsscript_evaluateFile(&se, script.data(), efSetWorkingDir);
+        if (ret != 0) {
+            auto msg = string("failed to evaluate script.\n") + vsscript_getError(se);
+            destroy();
+            throw msg.c_str();
         }
     }
 
-    node = vsscript_getOutput(se, index);
-    if (!node) {
-        env->ThrowError("%s: failed to get VapourSynth clip(index:%d).", mode,
-                        index);
+    if (mode[2] == 'E') {
+        std::vector<char> name;
+        convert_ansi_to_utf8(env->GetVar("$ScriptName$").AsString(), name);
+        int ret = vsscript_evaluateScript(&se, script.data(), name.data(), efSetWorkingDir);
+        if (ret != 0) {
+            auto msg = string("failed to evaluate script.\n") + vsscript_getError(se);
+            destroy();
+            throw msg.c_str();
+        }
     }
+
+    const string idx = std::to_string(index);
+    node = vsscript_getOutput(se, index);
+    validate(!node, "failed to get VapourSynth clip(index:" + idx + ")");
 
     vsvi = vsapi->getVideoInfo(node);
+    validate(vsvi->numFrames == 0, "input clip has infinite length.");
 
-    if (vsvi->numFrames == 0) {
-        env->ThrowError("%s: input clip has infinite length.", mode);
-    }
+    validate(!vsvi->format || vsvi->width == 0 || vsvi->height == 0,
+             "input clip is not constant format.");
 
-    if (!vsvi->format || vsvi->width == 0 || vsvi->height == 0) {
-        env->ThrowError("%s: input clip is not constant format.", mode);
-    }
+    validate(vsvi->fpsNum == 0, "input clip is not constant framerate.");
 
-    if (vsvi->fpsNum == 0) {
-        env->ThrowError("%s: input clip is not constant framerate.", mode);
-    }
-
-    if (vsvi->fpsNum > UINT_MAX) {
-        env->ThrowError("%s: clip has over %u fpsnum.", mode, UINT_MAX);
-    }
-
-    if (vsvi->fpsDen > UINT_MAX) {
-        env->ThrowError("%s: clip has over %u fpsden.", mode, UINT_MAX);
-    }
+    const string umax = std::to_string(UINT_MAX);
+    validate(vsvi->fpsNum > UINT_MAX, "clip has over" + umax + "fpsnum.");
+    validate(vsvi->fpsDen > UINT_MAX, "clip has over " + umax + "fpsden.");
 
     vi.pixel_type = get_avs_pixel_type(vsvi->format->id);
-    if (vi.pixel_type == VideoInfo::CS_UNKNOWN) {
-        env->ThrowError("%s: input clip is unsupported format.", mode);
-    }
+    validate(vi.pixel_type == vi.CS_UNKNOWN, "input clip is unsupported format.");
 
     int over_8bit = vi.IsPlanar() ? vsvi->format->bytesPerSample - 1 : 0;
     vi.width = vsvi->width << (over_8bit * (stacked ? 0 : 1));
@@ -311,18 +309,7 @@ VapourSource::VapourSource(const char* source, bool stacked, int index,
 
 VapourSource::~VapourSource()
 {
-    if (script_buffer) {
-        free(script_buffer);
-    }
-    if (node) {
-        vsapi->freeNode(node);
-    }
-    if (se) {
-        vsscript_freeScript(se);
-    }
-    if (is_init) {
-        vsscript_finalize();
-    }
+    destroy();
 }
 
 
@@ -330,7 +317,7 @@ PVideoFrame __stdcall VapourSource::GetFrame(int n, IScriptEnvironment* env)
 {
     const VSFrameRef* src = vsapi->getFrame(n, node, 0, 0);
     if (!src) {
-        env->ThrowError("%s: failed to get frame from vapoursynth.");
+        env->ThrowError("%s: failed to get frame from vapoursynth.", mode);
     }
 
     PVideoFrame dst = env->NewVideoFrame(vi);
@@ -346,12 +333,17 @@ PVideoFrame __stdcall VapourSource::GetFrame(int n, IScriptEnvironment* env)
 AVSValue __cdecl
 create_vapoursource(AVSValue args, void* user_data, IScriptEnvironment* env)
 {
-    const char* mode = (char*)user_data;
+    const char* mode = reinterpret_cast<char*>(user_data);
     if (!args[0].Defined()) {
         env->ThrowError("%s: No source specified", mode);
     }
-    return new VapourSource(args[0].AsString(), args[1].AsBool(false),
-                            args[2].AsInt(0), mode, env);
+    try {
+        return new VapourSource(args[0].AsString(), args[1].AsBool(false),
+                                args[2].AsInt(0), mode, env);
+    } catch (const char* e) {
+        env->ThrowError("%s: %s", mode, e);
+    }
+    return 0;
 }
 
 
@@ -360,8 +352,8 @@ AvisynthPluginInit3(IScriptEnvironment* env, const AVS_Linkage* const vectors)
 {
     AVS_linkage = vectors;
     env->AddFunction("VSImport", "[source]s[stacked]b[index]i",
-                     create_vapoursource, (void*)"VSImport");
+                     create_vapoursource, "VSImport");
     env->AddFunction("VSEval", "[source]s[stacked]b[index]i",
-                     create_vapoursource, (void*)"VSEval");
+                     create_vapoursource, "VSEval");
     return "VapourSynth Script importer ver." VS_VERSION " by Oka Motofumi";
 }
