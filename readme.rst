@@ -1,18 +1,18 @@
 ============
 VapourSource
 ============
-VapourSynth Script Importer for AviSynth2.6x
+VapourSynth Script Importer for Avisynth2.6/Avisynth+
+
+version:
+---------
+0.0.4
 
 requirement:
 ------------
-VapourSynth r19 or later
-
-AviSynth2.6alpha4 or later
-
-WindowsXPsp3/Vista/7/8
-
-Microsoft Visual C++ 2010 Redistributable Package
-
+VapourSynth r30 or later
+AviSynth2.60/Avisynth+r1569 or greater
+WindowsVista sp2 or later
+Microsoft Visual C++ 2015 Redistributable Package
 SSE2 capable CPU
 
 usage:
