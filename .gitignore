@@ -1,0 +1,16 @@
+src/Debug/*
+src/Release/*
+src/x64/*
+*.opensdf
+*.opendb
+*.psess
+*.sdf
+*.suo
+*.sln
+*.vcxproj.filters
+*.vcxproj.user
+*.vspx
+*.vsp
+*.dll
+*.avs
+*.exe

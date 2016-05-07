@@ -21,13 +21,15 @@
 */
 
 
-#include <stdio.h>
-#include <stdint.h>
+#include <cstdio>
+#include <cstdint>
 #include <limits.h>
 #include <emmintrin.h>
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <windows.h>
-#include "avisynth.h"
-#include "VSScript.h"
+#include <avisynth.h>
+#include <VSScript.h>
 
 #pragma warning(disable:4996)
 
@@ -361,5 +363,5 @@ AvisynthPluginInit3(IScriptEnvironment* env, const AVS_Linkage* const vectors)
                      create_vapoursource, (void*)"VSImport");
     env->AddFunction("VSEval", "[source]s[stacked]b[index]i",
                      create_vapoursource, (void*)"VSEval");
-    return "VapourSynth Script importer ver."VS_VERSION" by Oka Motofumi";
+    return "VapourSynth Script importer ver." VS_VERSION " by Oka Motofumi";
 }
