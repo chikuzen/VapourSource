@@ -10,9 +10,13 @@ version:
 requirement:
 ------------
 VapourSynth r30 or later
+
 AviSynth2.60/Avisynth+r1569 or greater
+
 WindowsVista sp2 or later
+
 Microsoft Visual C++ 2015 Redistributable Package
+
 SSE2 capable CPU
 
 usage:
