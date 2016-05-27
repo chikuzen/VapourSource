@@ -26,19 +26,22 @@
 #include <climits>
 #include <string>
 #include <vector>
+#include <stdexcept>
 #include <emmintrin.h>
 #define WIN32_LEAN_AND_MEAN
+#define VC_EXTRALEAN
 #define NOMINMAX
+#define NOGDI
 #include <windows.h>
 #include <avisynth.h>
 #include <VSScript.h>
 
 #pragma warning(disable:4996)
 
-#define VS_VERSION "0.0.4"
+#define VS_VERSION "0.0.5"
 
 
-static const AVS_Linkage* AVS_linkage = 0;
+typedef IScriptEnvironment ise_t;
 
 
 static void
@@ -46,17 +49,18 @@ convert_ansi_to_utf8(const char* ansi_string, std::vector<char>& buff)
 {
     int length = MultiByteToWideChar(CP_THREAD_ACP, 0, ansi_string, -1, 0, 0);
 
-    std::vector<wchar_t> wc_string;
-    wc_string.reserve(length + 1);
-    MultiByteToWideChar(CP_THREAD_ACP, 0, ansi_string, -1, wc_string.data(), length);
+    std::vector<wchar_t> wc_string(length, 0);
+    MultiByteToWideChar(
+        CP_THREAD_ACP, 0, ansi_string, -1, wc_string.data(), length);
 
     length = WideCharToMultiByte(CP_UTF8, 0, wc_string.data(), -1, 0, 0, 0, 0);
-    buff.reserve(length + 1);
-    WideCharToMultiByte(CP_UTF8, 0, wc_string.data(), -1, buff.data(), length, 0, 0);
+    buff.resize(length, 0);
+    WideCharToMultiByte(
+        CP_UTF8, 0, wc_string.data(), -1, buff.data(), length, 0, 0);
 }
 
 
-static int get_avs_pixel_type(int in)
+static int get_avs_pixel_type(int in) noexcept
 {
     struct {
         int vs_format;
@@ -91,10 +95,9 @@ static int get_avs_pixel_type(int in)
 
 static void __stdcall
 write_interleaved_frame(const VSAPI* vsapi, const VSFrameRef* src,
-                        PVideoFrame& dst, int num_planes,
-                        IScriptEnvironment* env)
+                        PVideoFrame& dst, const int num_planes, ise_t* env) noexcept
 {
-    int planes[] = {PLANAR_Y, PLANAR_U, PLANAR_V};
+    static const int planes[] = {PLANAR_Y, PLANAR_U, PLANAR_V};
 
     int pitch_mul = 1;
     int dstp_adjust = 0;
@@ -104,36 +107,36 @@ write_interleaved_frame(const VSAPI* vsapi, const VSFrameRef* src,
     }
 
     for (int p = 0; p < num_planes; p++) {
-        int dst_pitch = dst->GetPitch(planes[p]) * pitch_mul;
-        int height = dst->GetHeight(planes[p]);
-        uint8_t *dstp = dst->GetWritePtr(planes[p]) +
+        const int plane = planes[p];
+
+        int dst_pitch = dst->GetPitch(plane) * pitch_mul;
+        int height = dst->GetHeight(plane);
+        uint8_t *dstp = dst->GetWritePtr(plane) +
                         dstp_adjust * (-dst_pitch * (height - 1));
 
-        env->BitBlt(dstp, dst_pitch,
-                    vsapi->getReadPtr(src, p),
-                    vsapi->getStride(src, p),
-                    dst->GetRowSize(planes[p]),
-                    height);
+        env->BitBlt(dstp, dst_pitch, vsapi->getReadPtr(src, p),
+                    vsapi->getStride(src, p), dst->GetRowSize(plane), height);
     }
 }
 
 
 static void __stdcall
 write_stacked_frame(const VSAPI* vsapi, const VSFrameRef* src,
-                    PVideoFrame& dst, int num_planes, IScriptEnvironment* env)
+                    PVideoFrame& dst, const int num_planes, ise_t* env) noexcept
 {
-    int plane[] = {PLANAR_Y, PLANAR_U, PLANAR_V};
+    int planes[] = {PLANAR_Y, PLANAR_U, PLANAR_V};
 
     __m128i mask = _mm_set1_epi16(0x00FF);
 
     for (int p = 0; p < num_planes; p++) {
+        const int plane = planes[p];
 
-        int rowsize = dst->GetRowSize(plane[p]);
-        int height = dst->GetHeight(plane[p]) / 2;
+        int rowsize = dst->GetRowSize(plane);
+        int height = dst->GetHeight(plane) / 2;
         int src_pitch = vsapi->getStride(src, p);
-        int dst_pitch = dst->GetPitch(plane[p]);
+        int dst_pitch = dst->GetPitch(plane);
         const uint8_t* srcp = vsapi->getReadPtr(src, p);
-        uint8_t* dstp0 = dst->GetWritePtr(plane[p]);
+        uint8_t* dstp0 = dst->GetWritePtr(plane);
         uint8_t* dstp1 = dstp0 + dst_pitch * height;
 
         for (int y = 0; y < height; y++) {
@@ -160,7 +163,7 @@ write_stacked_frame(const VSAPI* vsapi, const VSFrameRef* src,
 
 static void __stdcall
 write_bgr24_frame(const VSAPI* vsapi, const VSFrameRef* src,
-                  PVideoFrame& dst, int num_planes, IScriptEnvironment* env)
+                  PVideoFrame& dst, int num_planes, ise_t* env) noexcept
 {
     int width = vsapi->getFrameWidth(src, 0);
     int height = vsapi->getFrameHeight(src, 0);
@@ -189,64 +192,63 @@ write_bgr24_frame(const VSAPI* vsapi, const VSFrameRef* src,
 
 class VapourSource : public IClip {
     const char* mode;
-    int is_init;
-    VSScript* se;
+    int isInit;
+    VSScript* vsEnv;
     const VSAPI* vsapi;
     VSNodeRef* node;
     const VSVideoInfo* vsvi;
     VideoInfo vi;
 
     void (__stdcall *func_write_frame)(const VSAPI*, const VSFrameRef*,
-                                       PVideoFrame&, int, IScriptEnvironment*);
+                                       PVideoFrame&, int, ise_t*);
     void validate(bool cond, std::string msg);
-    void destroy();
+    void destroy() noexcept;
 
 public:
     VapourSource(const char* source, bool stacked, int index, const char* mode,
-                 IScriptEnvironment* env);
+                 ise_t* env);
     ~VapourSource();
-    PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* env);
+    PVideoFrame __stdcall GetFrame(int n, ise_t* env);
     bool __stdcall GetParity(int n) { return false; }
-    void __stdcall GetAudio(void*, __int64, __int64, IScriptEnvironment*) {}
+    void __stdcall GetAudio(void*, __int64, __int64, ise_t*) {}
     const VideoInfo& __stdcall GetVideoInfo() { return vi; }
     int __stdcall SetCacheHints(int, int) { return 0; }
 };
 
 
-void VapourSource::destroy()
+void VapourSource::destroy() noexcept
 {
     if (node) {
         vsapi->freeNode(node);
     }
-    if (se) {
-        vsscript_freeScript(se);
+    if (vsEnv) {
+        vsscript_freeScript(vsEnv);
     }
-    if (is_init) {
+    if (isInit) {
         vsscript_finalize();
     }
 }
+
 
 void VapourSource::validate(bool cond, std::string msg)
 {
     if (cond) {
         destroy();
-        throw msg;
+        throw std::runtime_error(msg);
     }
 }
 
+
 VapourSource::
 VapourSource(const char* source, bool stacked, int index, const char* m,
-             IScriptEnvironment* env) : mode(m)
+             ise_t* env) : mode(m), isInit(0), vsEnv(nullptr), node(nullptr)
 {
     using std::string;
 
-    is_init = 0;
-    se = nullptr;
-    node = nullptr;
     memset(&vi, 0, sizeof(vi));
 
-    is_init = vsscript_init();
-    validate(is_init == 0, "failed to initialize VapourSynth.");
+    isInit = vsscript_init();
+    validate(isInit == 0, "failed to initialize VapourSynth.");
 
     vsapi = vsscript_getVSApi();
     validate(!vsapi, "failed to get vsapi pointer.");
@@ -255,27 +257,30 @@ VapourSource(const char* source, bool stacked, int index, const char* m,
     convert_ansi_to_utf8(source, script);
 
     if (mode[2] == 'I') {
-        int ret = vsscript_evaluateFile(&se, script.data(), efSetWorkingDir);
+        int ret = vsscript_evaluateFile(&vsEnv, script.data(), efSetWorkingDir);
         if (ret != 0) {
-            auto msg = string("failed to evaluate script.\n") + vsscript_getError(se);
+            auto msg = string("failed to evaluate script.\n")
+                + vsscript_getError(vsEnv);
             destroy();
-            throw msg;
+            throw std::runtime_error(msg);
         }
     }
 
     if (mode[2] == 'E') {
         std::vector<char> name;
         convert_ansi_to_utf8(env->GetVar("$ScriptName$").AsString(), name);
-        int ret = vsscript_evaluateScript(&se, script.data(), name.data(), efSetWorkingDir);
-        if (ret != 0) {
-            auto msg = string("failed to evaluate script.\n") + vsscript_getError(se);
+        int ret = vsscript_evaluateScript(
+            &vsEnv, script.data(), name.data(), efSetWorkingDir);
+        if (ret != 0) { 
+            auto msg = string("failed to evaluate script.\n")
+                + vsscript_getError(vsEnv);
             destroy();
-            throw msg;
+            throw std::runtime_error(msg);
         }
     }
 
     const string idx = std::to_string(index);
-    node = vsscript_getOutput(se, index);
+    node = vsscript_getOutput(vsEnv, index);
     validate(!node, "failed to get VapourSynth clip(index:" + idx + ")");
 
     vsvi = vsapi->getVideoInfo(node);
@@ -313,7 +318,7 @@ VapourSource::~VapourSource()
 }
 
 
-PVideoFrame __stdcall VapourSource::GetFrame(int n, IScriptEnvironment* env)
+PVideoFrame __stdcall VapourSource::GetFrame(int n, ise_t* env)
 {
     const VSFrameRef* src = vsapi->getFrame(n, node, 0, 0);
     if (!src) {
@@ -331,7 +336,7 @@ PVideoFrame __stdcall VapourSource::GetFrame(int n, IScriptEnvironment* env)
 
 
 AVSValue __cdecl
-create_vapoursource(AVSValue args, void* user_data, IScriptEnvironment* env)
+create_vapoursource(AVSValue args, void* user_data, ise_t* env)
 {
     const char* mode = reinterpret_cast<char*>(user_data);
     if (!args[0].Defined()) {
@@ -340,20 +345,31 @@ create_vapoursource(AVSValue args, void* user_data, IScriptEnvironment* env)
     try {
         return new VapourSource(args[0].AsString(), args[1].AsBool(false),
                                 args[2].AsInt(0), mode, env);
-    } catch (std::string e) {
-        env->ThrowError("%s: %s", mode, e.c_str());
+    } catch (std::runtime_error& e) {
+        env->ThrowError("%s: %s", mode, e.what());
     }
     return 0;
 }
 
 
+static const AVS_Linkage* AVS_linkage = 0;
+
+
 extern "C" __declspec(dllexport) const char* __stdcall
-AvisynthPluginInit3(IScriptEnvironment* env, const AVS_Linkage* const vectors)
+AvisynthPluginInit3(ise_t* env, const AVS_Linkage* const vectors)
 {
     AVS_linkage = vectors;
+
     env->AddFunction("VSImport", "[source]s[stacked]b[index]i",
                      create_vapoursource, "VSImport");
     env->AddFunction("VSEval", "[source]s[stacked]b[index]i",
                      create_vapoursource, "VSEval");
+
+    if (env->FunctionExists("SetFilterMTMode")) {
+        auto env2 = static_cast<IScriptEnvironment2*>(env);
+        env2->SetFilterMTMode("VSImport", MT_SERIALIZED, true);
+        env2->SetFilterMTMode("VSEval", MT_SERIALIZED, true);
+    }
+
     return "VapourSynth Script importer ver." VS_VERSION " by Oka Motofumi";
 }

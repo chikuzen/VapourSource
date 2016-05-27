@@ -1,6 +1,7 @@
 src/Debug/*
 src/Release/*
 src/x64/*
+archive/*
 *.opensdf
 *.opendb
 *.psess
