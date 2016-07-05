@@ -38,7 +38,7 @@
 
 #pragma warning(disable:4996)
 
-#define VS_VERSION "0.0.5"
+#define VS_VERSION "0.1.0"
 
 
 typedef IScriptEnvironment ise_t;
@@ -60,31 +60,35 @@ convert_ansi_to_utf8(const char* ansi_string, std::vector<char>& buff)
 }
 
 
-static int get_avs_pixel_type(int in) noexcept
+static int get_avs_pixel_type(int in, bool is_plus) noexcept
 {
     struct {
         int vs_format;
         int avs_pixel_type;
     } table[] = {
-        {pfGray8,       VideoInfo::CS_Y8     },
-        {pfGray16,      VideoInfo::CS_Y8     },
-        {pfYUV420P8,    VideoInfo::CS_I420   },
-        {pfYUV420P9,    VideoInfo::CS_I420   },
-        {pfYUV420P10,   VideoInfo::CS_I420   },
-        {pfYUV420P16,   VideoInfo::CS_I420   },
-        {pfYUV422P8,    VideoInfo::CS_YV16   },
-        {pfYUV422P9,    VideoInfo::CS_YV16   },
-        {pfYUV422P10,   VideoInfo::CS_YV16   },
-        {pfYUV422P16,   VideoInfo::CS_YV16   },
-        {pfYUV444P8,    VideoInfo::CS_YV24   },
-        {pfYUV444P9,    VideoInfo::CS_YV24   },
-        {pfYUV444P10,   VideoInfo::CS_YV24   },
-        {pfYUV444P16,   VideoInfo::CS_YV24   },
-        {pfYUV411P8,    VideoInfo::CS_YV411  },
-        {pfRGB24,       VideoInfo::CS_BGR24  },
-        {pfCompatBGR32, VideoInfo::CS_BGR32  },
-        {pfCompatYUY2,  VideoInfo::CS_YUY2   },
-        {in,            VideoInfo::CS_UNKNOWN}
+        {pfGray8,       VideoInfo::CS_Y8 },
+        {pfGray16,      is_plus ? VideoInfo::CS_Y16 : VideoInfo::CS_Y8 },
+        {pfGrayH,       is_plus ? VideoInfo::CS_Y16 : VideoInfo::CS_Y8 },
+        {pfGrayS,       is_plus ? VideoInfo::CS_Y32 : VideoInfo::CS_Y8 },
+        {pfYUV420P8,    VideoInfo::CS_I420 },
+        {pfYUV420P9,    is_plus ? VideoInfo::CS_YUV420P16 : VideoInfo::CS_I420 },
+        {pfYUV420P10,   is_plus ? VideoInfo::CS_YUV420P16 : VideoInfo::CS_I420 },
+        {pfYUV420P16,   is_plus ? VideoInfo::CS_YUV420P16 : VideoInfo::CS_I420 },
+        {pfYUV422P8,    VideoInfo::CS_YV16 },
+        {pfYUV422P9,    is_plus ? VideoInfo::CS_YUV422P16 : VideoInfo::CS_YV16 },
+        {pfYUV422P10,   is_plus ? VideoInfo::CS_YUV422P16 : VideoInfo::CS_YV16 },
+        {pfYUV422P16,   is_plus ? VideoInfo::CS_YUV422P16 : VideoInfo::CS_YV16 },
+        {pfYUV444P8,    VideoInfo::CS_YV24 },
+        {pfYUV444P9,    is_plus ? VideoInfo::CS_YUV444P16 : VideoInfo::CS_YV24 },
+        {pfYUV444P10,   is_plus ? VideoInfo::CS_YUV444P16 : VideoInfo::CS_YV24 },
+        {pfYUV444P16,   is_plus ? VideoInfo::CS_YUV444P16 : VideoInfo::CS_YV24 },
+        {pfYUV444PH,    is_plus ? VideoInfo::CS_YUV444P16 : VideoInfo::CS_YV24 },
+        {pfYUV444PS,    is_plus ? VideoInfo::CS_YUV444PS : VideoInfo::CS_YV24 },
+        {pfYUV411P8,    VideoInfo::CS_YV411 },
+        {pfRGB24,       VideoInfo::CS_BGR24 },
+        {pfCompatBGR32, VideoInfo::CS_BGR32 },
+        {pfCompatYUY2,  VideoInfo::CS_YUY2 },
+        {in,            VideoInfo::CS_UNKNOWN }
     };
 
     int i = 0;
@@ -103,7 +107,7 @@ write_interleaved_frame(const VSAPI* vsapi, const VSFrameRef* src,
     int dstp_adjust = 0;
     if ((vsapi->getFrameFormat(src))->id == pfCompatBGR32) {
         pitch_mul = -1;
-        dstp_adjust = 1;
+        dstp_adjust = -1;
     }
 
     for (int p = 0; p < num_planes; p++) {
@@ -112,7 +116,7 @@ write_interleaved_frame(const VSAPI* vsapi, const VSFrameRef* src,
         int dst_pitch = dst->GetPitch(plane) * pitch_mul;
         int height = dst->GetHeight(plane);
         uint8_t *dstp = dst->GetWritePtr(plane) +
-                        dstp_adjust * (-dst_pitch * (height - 1));
+                        dstp_adjust * (dst_pitch * (height - 1));
 
         env->BitBlt(dstp, dst_pitch, vsapi->getReadPtr(src, p),
                     vsapi->getStride(src, p), dst->GetRowSize(plane), height);
@@ -295,20 +299,30 @@ VapourSource(const char* source, bool stacked, int index, const char* m,
     validate(vsvi->fpsNum > UINT_MAX, "clip has over" + umax + "fpsnum.");
     validate(vsvi->fpsDen > UINT_MAX, "clip has over " + umax + "fpsden.");
 
-    vi.pixel_type = get_avs_pixel_type(vsvi->format->id);
+    bool is_plus = env->FunctionExists("SetFilterMTMode") && !stacked;
+
+    vi.pixel_type = get_avs_pixel_type(vsvi->format->id, is_plus);
     validate(vi.pixel_type == vi.CS_UNKNOWN, "input clip is unsupported format.");
 
-    int over_8bit = vi.IsPlanar() ? vsvi->format->bytesPerSample - 1 : 0;
-    vi.width = vsvi->width << (over_8bit * (stacked ? 0 : 1));
-    vi.height = vsvi->height << (over_8bit * (stacked ? 1 : 0));
+    vi.width = vsvi->width;
+    vi.height = vsvi->height;
     vi.fps_numerator = (unsigned)vsvi->fpsNum;
     vi.fps_denominator = (unsigned)vsvi->fpsDen;
     vi.num_frames = vsvi->numFrames;
     vi.SetFieldBased(false);
 
-    func_write_frame = vi.IsRGB24()           ? write_bgr24_frame :
-                       over_8bit && stacked   ? write_stacked_frame :
-                                                write_interleaved_frame;
+    int bytes = vi.IsPlanar() ? vsvi->format->bytesPerSample : 1;
+    if (!is_plus && bytes > 1) {
+        vi.width *= bytes;
+    }
+    if (stacked && bytes > 1) {
+        vi.width /= 2;
+        vi.height *= 2;
+    }
+
+    func_write_frame = vi.IsRGB24()         ? write_bgr24_frame :
+                       stacked && bytes > 1 ? write_stacked_frame :
+                                              write_interleaved_frame;
 }
 
 
@@ -364,12 +378,12 @@ AvisynthPluginInit3(ise_t* env, const AVS_Linkage* const vectors)
                      create_vapoursource, "VSImport");
     env->AddFunction("VSEval", "[source]s[stacked]b[index]i",
                      create_vapoursource, "VSEval");
-
+#if 0
     if (env->FunctionExists("SetFilterMTMode")) {
         auto env2 = static_cast<IScriptEnvironment2*>(env);
         env2->SetFilterMTMode("VSImport", MT_SERIALIZED, true);
         env2->SetFilterMTMode("VSEval", MT_SERIALIZED, true);
     }
-
+#endif
     return "VapourSynth Script importer ver." VS_VERSION " by Oka Motofumi";
 }
