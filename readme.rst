@@ -37,6 +37,7 @@ as follows.::
 
 Measurement table of formats:
 ------------------------------
+VapourSynth input is converted as follows.::
 
     VapourSynth         Avisynth2.6         Avisynth+MT
     GRAY8               Y8                  Y8
