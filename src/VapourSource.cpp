@@ -209,9 +209,9 @@ class VapourSource : public IClip {
     void destroy() noexcept;
 
 public:
-    VapourSource(const char* source, bool stacked, int index, const char* mode,
-                 ise_t* env);
-    ~VapourSource();
+    VapourSource(const char* source, bool stacked, int index, bool utf8, 
+                 const char* mode, IScriptEnvironment* env);
+    virtual ~VapourSource();
     PVideoFrame __stdcall GetFrame(int n, ise_t* env);
     bool __stdcall GetParity(int n) { return false; }
     void __stdcall GetAudio(void*, __int64, __int64, ise_t*) {}
@@ -244,8 +244,9 @@ void VapourSource::validate(bool cond, std::string msg)
 
 
 VapourSource::
-VapourSource(const char* source, bool stacked, int index, const char* m,
-             ise_t* env) : mode(m), isInit(0), vsEnv(nullptr), node(nullptr)
+VapourSource(const char* source, bool stacked, int index, bool utf8,
+             const char* m, ise_t* env) :
+    mode(m), isInit(0), vsEnv(nullptr), node(nullptr)
 {
     using std::string;
 
@@ -258,7 +259,12 @@ VapourSource(const char* source, bool stacked, int index, const char* m,
     validate(!vsapi, "failed to get vsapi pointer.");
 
     std::vector<char> script;
-    convert_ansi_to_utf8(source, script);
+    if (utf8) {
+        script.resize(strlen(source) + 1);
+        memcpy(script.data(), source, script.size() - 1);
+    } else {
+        convert_ansi_to_utf8(source, script);
+    }
 
     if (mode[2] == 'I') {
         int ret = vsscript_evaluateFile(&vsEnv, script.data(), efSetWorkingDir);
@@ -356,9 +362,11 @@ create_vapoursource(AVSValue args, void* user_data, ise_t* env)
     if (!args[0].Defined()) {
         env->ThrowError("%s: No source specified", mode);
     }
+    bool utf8 = mode[2] == 'E' ? args[3].AsBool(false) : false;
+    
     try {
         return new VapourSource(args[0].AsString(), args[1].AsBool(false),
-                                args[2].AsInt(0), mode, env);
+                                args[2].AsInt(0), utf8, mode, env);
     } catch (std::runtime_error& e) {
         env->ThrowError("%s: %s", mode, e.what());
     }
@@ -376,14 +384,14 @@ AvisynthPluginInit3(ise_t* env, const AVS_Linkage* const vectors)
 
     env->AddFunction("VSImport", "[source]s[stacked]b[index]i",
                      create_vapoursource, "VSImport");
-    env->AddFunction("VSEval", "[source]s[stacked]b[index]i",
+    env->AddFunction("VSEval", "[source]s[stacked]b[index]i[utf8]b",
                      create_vapoursource, "VSEval");
-#if 0
+
     if (env->FunctionExists("SetFilterMTMode")) {
         auto env2 = static_cast<IScriptEnvironment2*>(env);
         env2->SetFilterMTMode("VSImport", MT_SERIALIZED, true);
         env2->SetFilterMTMode("VSEval", MT_SERIALIZED, true);
     }
-#endif
+
     return "VapourSynth Script importer ver." VS_VERSION " by Oka Motofumi";
 }
