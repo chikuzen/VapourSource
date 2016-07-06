@@ -210,7 +210,7 @@ class VapourSource : public IClip {
 
 public:
     VapourSource(const char* source, bool stacked, int index, bool utf8, 
-                 const char* mode, IScriptEnvironment* env);
+                 const char* mode, ise_t* env);
     virtual ~VapourSource();
     PVideoFrame __stdcall GetFrame(int n, ise_t* env);
     bool __stdcall GetParity(int n) { return false; }
@@ -260,7 +260,7 @@ VapourSource(const char* source, bool stacked, int index, bool utf8,
 
     std::vector<char> script;
     if (utf8) {
-        script.resize(strlen(source) + 1);
+        script.resize(strlen(source) + 1, 0);
         memcpy(script.data(), source, script.size() - 1);
     } else {
         convert_ansi_to_utf8(source, script);
